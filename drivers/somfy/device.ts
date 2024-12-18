@@ -1,12 +1,24 @@
 import Homey from 'homey';
+import { SomfyApi } from '../../api/somfy.api';
 
 module.exports = class MyDevice extends Homey.Device {
+
+  private interval: NodeJS.Timer | undefined = undefined;
+  private somfyApi: SomfyApi = new SomfyApi();
 
   /**
    * onInit is called when the device is initialized.
    */
   async onInit() {
     this.log('MyDevice has been initialized');
+
+    // scheduling
+    const settings = await this.getSettings()
+    const username = settings['username'];
+    const password = settings['password'];
+
+    await this.somfyApi.login(username, password);
+    this.schedule();
   }
 
   /**
@@ -50,6 +62,26 @@ module.exports = class MyDevice extends Homey.Device {
    */
   async onDeleted() {
     this.log('MyDevice has been deleted');
+  }
+
+  schedule() {
+    // cancel any existing timers if present
+    if (this.interval) {
+      console.log("Removing the existing interval")
+      this.homey.clearTimeout(this.interval)
+    }
+
+
+    // scheduled & keep track
+    this.interval = this.homey.setInterval(this.sync.bind(this), 10000);
+  }
+
+  /**
+   * Perform the synchronisation of the data towards Homey.
+   */
+  async sync() {
+    console.log("running synchronisation");
+    await this.somfyApi.retrieveHomeAlarm();
   }
 
 };

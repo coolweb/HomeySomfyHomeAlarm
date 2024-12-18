@@ -25,18 +25,21 @@ module.exports = class MyDriver extends Homey.Driver {
       password = data.password;
 
       try {
+        this.log("Login to somfy api...")
         await somfyApi.login(username, password);
         return true;
       }
       catch (e) {
+        this.log("Error login to somfy: " + e);
         throw e;
       }
     });
 
     session.setHandler("list_devices", async () => {
       const homeAlarm = await somfyApi.retrieveHomeAlarm();
+      this.log(homeAlarm);
 
-      return {
+      return [{
         name: homeAlarm.name,
         data: {
           id: homeAlarm.siteId,
@@ -47,7 +50,7 @@ module.exports = class MyDriver extends Homey.Driver {
           username,
           password,
         },
-      };
+      }];
     });
   }
 
