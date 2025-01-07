@@ -5,6 +5,7 @@ module.exports = class MyDevice extends Homey.Device {
 
   private interval: NodeJS.Timer | undefined = undefined;
   private somfyApi: SomfyApi = new SomfyApi();
+  private HOME_ALARM_STATE_CAPABILITY = 'homealarm_state';
 
   /**
    * onInit is called when the device is initialized.
@@ -19,6 +20,10 @@ module.exports = class MyDevice extends Homey.Device {
 
     await this.somfyApi.login(username, password);
     this.schedule();
+
+    this.registerCapabilityListener(this.HOME_ALARM_STATE_CAPABILITY, async (value) => {
+      await this.onAlarmStateChanged(value);
+    });
   }
 
   /**
@@ -46,6 +51,33 @@ module.exports = class MyDevice extends Homey.Device {
     changedKeys: string[];
   }): Promise<string | void> {
     this.log("MyDevice settings where changed");
+
+    const settings = await this.getSettings()
+    let username = settings['username'];
+    let password = settings['password'];
+    var mustLogin = false;
+
+    if (changedKeys.find(k => k == 'username')) {
+      username = newSettings['username'];
+      mustLogin = true;
+    }
+
+    if (changedKeys.find(k => k == 'password')) {
+      password = newSettings['password'];
+      mustLogin = true;
+    }
+
+    if (mustLogin) {
+      console.log('Device - user and/or password changed, try to login');
+      await this.somfyApi.login(username, password);
+
+      // check the site id
+      var alarm = await this.somfyApi.retrieveHomeAlarm();
+      if (alarm.siteId != this.getDeviceId()) {
+        console.log(`Device - The site id is not the same actual id: ${this.getDeviceId}, new id: ${alarm.siteId}`);
+        throw new Error('The site id is not the same as the previous one, to do this remove the alarm and add it again');
+      }
+    }
   }
 
   /**
@@ -66,14 +98,11 @@ module.exports = class MyDevice extends Homey.Device {
 
   schedule() {
     // cancel any existing timers if present
-    if (this.interval) {
-      console.log("Removing the existing interval")
-      this.homey.clearTimeout(this.interval)
-    }
+    this.clearSyncInterval();
 
 
     // scheduled & keep track
-    this.interval = this.homey.setInterval(this.sync.bind(this), 10000);
+    this.interval = this.homey.setInterval(this.sync.bind(this), 60000);
   }
 
   /**
@@ -81,7 +110,49 @@ module.exports = class MyDevice extends Homey.Device {
    */
   async sync() {
     console.log("running synchronisation");
-    await this.somfyApi.retrieveHomeAlarm();
+    var alarmData = await this.somfyApi.retrieveHomeAlarm();
+    this.setAlarmState(alarmData.securityLevel);
+  }
+
+  private clearSyncInterval() {
+    if (this.interval) {
+      console.log("Removing the existing interval")
+      this.homey.clearTimeout(this.interval)
+    }
+  }
+
+  private setAlarmState(state: String) {
+    switch (state) {
+      case 'armed':
+        this.setCapabilityValue(this.HOME_ALARM_STATE_CAPABILITY, 'armed');
+        break;
+
+      case 'disarmed':
+        this.setCapabilityValue(this.HOME_ALARM_STATE_CAPABILITY, 'disarmed');
+        break;
+
+      case 'partial':
+        this.setCapabilityValue(this.HOME_ALARM_STATE_CAPABILITY, 'partially_armed');
+        break;
+
+      default:
+        break;
+    }
+  }
+
+  private getDeviceId(): String {
+    return this.getData().id;
+  }
+
+  private async onAlarmStateChanged(state: String) {
+    // prevent sync while changing state on somfy server
+    this.clearSyncInterval();
+
+    var somfyAlarmState = state == 'partially_armed' ? 'partial' : state;
+
+    await this.somfyApi.updateAlarmState(this.getDeviceId(), somfyAlarmState);
+    // reenable the sync
+    this.schedule();
   }
 
 };

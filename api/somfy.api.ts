@@ -1,4 +1,4 @@
-import { SimpleClass } from "homey";
+import { addSeconds, format } from 'date-fns';
 
 export class SomfyApi {
     private clintId = "84eddf48-2b8e-11e5-b2a5-124cfab25595_475buqrf8v8kgwoo4gow08gkkc0ck80488wo44s8o48sg84k40";
@@ -7,15 +7,14 @@ export class SomfyApi {
     private refreshToken: string | undefined = undefined;
     private username: string = "";
     private password: string = "";
+    private renewalTime: Date | undefined;
+    private tokenExpirationTime: number = 0;
 
     constructor() {
 
     }
 
     async login(username: string, password: string) {
-        this.username = username;
-        this.password = password;
-
         await this.retrieveAccessTokenAndRefreshToken(username, password);
     }
 
@@ -41,10 +40,15 @@ export class SomfyApi {
             throw new Error(res.statusText);
         }
 
+        this.username = username;
+        this.password = password;
+
         const response = JSON.parse(await res.text());
 
         this.accessToken = response.access_token;
         this.refreshToken = response.refresh_token;
+        this.tokenExpirationTime = response.expires_in;
+
 
         console.log('SomfyApi - Login successfull, received access and refresh tokens');
         return {
@@ -54,18 +58,12 @@ export class SomfyApi {
     }
 
     async retrieveHomeAlarm() {
-        console.log('SomfyApi - Retrieve home alarm');
-
-        if (this.refreshToken == undefined) {
-            console.log('SomfyApi - no access refresh token');
-            await this.retrieveAccessTokenAndRefreshToken(this.username, this.password);
-        }
-
         let headers = { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + this.accessToken };
         let res;
 
+        console.log('SomfyApi - Retrieve home alarm');
         // get all sites
-        res = await fetch('https://api.myfox.io/v3/site',
+        res = await this.fetchSomfyApi('https://api.myfox.io/v3/site',
             {
                 method: 'GET',
                 headers: headers,
@@ -76,9 +74,12 @@ export class SomfyApi {
         }
 
         let response = JSON.parse(await res.text());
+        console.log('SomfyApi - alarm retrieved');
+        console.log(JSON.stringify(response));
+
         const somfyDevice = response.items[0];
 
-        console.log('SomfyApi - alarm retrieved');
+
         return {
             siteId: somfyDevice.site_id,
             name: somfyDevice.name,
@@ -86,4 +87,48 @@ export class SomfyApi {
         }
 
     }
+
+    async updateAlarmState(siteId: String, state: String) {
+        let headers = { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + this.accessToken };
+        let res;
+
+        console.log('SomfyApi - update alarm state with ' + state);
+        await this.checkAndRenewToken();
+        res = await this.fetchSomfyApi('https://api.myfox.io/v3/site/' + siteId + '/security',
+            {
+                method: 'PUT',
+                headers: headers,
+                body: JSON.stringify({ status: state })
+            });
+
+        if (!res.ok) {
+            throw new Error(res.statusText);
+        }
+    }
+
+    computeRenewalTimeOfToken(expirationTime: number): Date {
+        const issuedAt = new Date();
+        const expiresIn = expirationTime;
+        const bufferTime = 300;
+        this.renewalTime = addSeconds(issuedAt, expiresIn - bufferTime);
+        return this.renewalTime;
+    }
+
+    async checkAndRenewToken() {
+        const now = new Date();
+
+        if (this.renewalTime == undefined || now.getTime() >= this.renewalTime.getTime()) {
+            console.log('SomfyApi - token is expired, get new one');
+            await this.retrieveAccessTokenAndRefreshToken(this.username, this.password);
+        }
+    }
+
+    async fetchSomfyApi(
+        input: string | URL | globalThis.Request,
+        init?: RequestInit,
+    ): Promise<Response> {
+        await this.checkAndRenewToken();
+        return fetch(input, init);
+    }
+
 }
